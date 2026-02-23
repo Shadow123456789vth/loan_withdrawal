@@ -137,21 +137,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     accessTokenRef.current = access_token;
 
-    // Fetch current user + domain via proxy using the known username
-    const userRes = await fetch(buildUserInfoURL(username), {
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-        Accept: 'application/json',
-      },
-    });
+    // Attempt to fetch full user profile + domain context.
+    // Falls back to a minimal object if the endpoint is unavailable —
+    // replace VITE_SN_USER_INFO_PATH with the Scripted REST endpoint
+    // (/api/x_dxcis_loans_wi_0/auth/me) once provisioned in ServiceNow.
+    let user: SNUser;
+    try {
+      const userRes = await fetch(buildUserInfoURL(username), {
+        headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' },
+      });
 
-    if (!userRes.ok) {
-      throw new Error(`Could not retrieve user profile (${userRes.status})`);
+      if (!userRes.ok) throw new Error(`${userRes.status}`);
+
+      const body = await userRes.json() as { result?: SNUser[] } | SNUser;
+      // Handle both Table API response ({ result: [...] }) and Scripted REST ({ sys_id, ... })
+      const record = 'result' in body ? (body as { result: SNUser[] }).result[0] : body as SNUser;
+      if (!record) throw new Error('empty');
+      user = record;
+    } catch {
+      // Fallback: construct minimal user from login credentials.
+      // Domain context will be unavailable until the Scripted REST endpoint is set up.
+      user = {
+        sys_id: '',
+        name: username,
+        user_name: username,
+        email: '',
+        sys_domain: { value: '', display_value: '' },
+      };
     }
-
-    const { result } = await userRes.json() as { result: SNUser[] };
-    const user = result[0];
-    if (!user) throw new Error('No user record returned from ServiceNow');
 
     sessionStorage.setItem(
       SESSION_KEY,
