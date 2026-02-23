@@ -191,9 +191,20 @@ export function DashboardPage() {
   const [liveCases, setLiveCases] = useState<SNCase[] | null>(null);
   const [dataLoading, setDataLoading] = useState(false);
 
-  // Fetch from x_dxcis_loans_wi_0_loans_withdrawals when authenticated
+  // Auto-load demo data from ServiceNow on mount (prod only, no user auth required)
   useEffect(() => {
-    if (!isAuthenticated) { setLiveCases(null); return; }
+    if (import.meta.env.DEV) return; // dev shows mock data until user connects
+    setDataLoading(true);
+    fetch('/api/servicenow-demo')
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data: { result?: SNCase[] }) => setLiveCases(data.result ?? []))
+      .catch(() => { /* silently fall back to mock data */ })
+      .finally(() => setDataLoading(false));
+  }, []);
+
+  // When authenticated, override with user-scoped live data
+  useEffect(() => {
+    if (!isAuthenticated) return; // don't clear demo data on logout
     setDataLoading(true);
     snGet<{ result: SNCase[] }>('/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals', {
       sysparm_limit: '50',
@@ -203,7 +214,7 @@ export function DashboardPage() {
       sysparm_fields: 'sys_id,number,state,sys_created_on,transaction_type,touch_level,policy_number,owner_name,channel_source',
     })
       .then((data) => setLiveCases(data.result ?? []))
-      .catch(() => setLiveCases([]))
+      .catch(() => { /* keep existing demo data on failure */ })
       .finally(() => setDataLoading(false));
   }, [isAuthenticated]);
 
