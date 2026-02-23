@@ -28,18 +28,20 @@ import type { TouchLevel } from '../types/entities';
 import { DXC } from '../theme/dxcTheme';
 
 // ─── ServiceNow record shape ────────────────────────────────────────────────
-// Field names reflect x_dxcis_loans_wi_0_loans_withdrawals table.
-// Adjust if your column names differ.
+// Fields confirmed from x_dxcis_loans_wi_0_loans_withdrawals XML export.
+// sysparm_display_value=true is used so reference fields (opened_by) and
+// choice fields (state, contact_type) return their display values directly.
 interface SNCase {
   sys_id: string;
   number: string;
-  state: string;
+  state: string;          // display value e.g. "New", "In Progress", "Closed"
+  stage: string;          // e.g. "initiation", "processing"
   sys_created_on: string;
   transaction_type: string;
   touch_level: string;
   policy_number: string;
-  owner_name: string;
-  channel_source: string;
+  opened_by: string;      // display value e.g. "Saurabh Phengse"
+  contact_type: string;   // e.g. "web", "phone", "email"
 }
 
 // ─── Mock dashboard data (demo mode) ───────────────────────────────────────
@@ -105,14 +107,16 @@ function normaliseTouchLevel(raw: string): TouchLevel {
   return 'MODERATE';
 }
 
-function normaliseStatus(state: string, touchLevel: string): CaseStatus {
-  const s = state?.toLowerCase() ?? '';
-  const t = touchLevel?.toLowerCase() ?? '';
-  if (s.includes('nigo') || s.includes('not in good')) return 'NIGO';
-  if (s.includes('approv') || s.includes('complet') || s.includes('closed')) {
+function normaliseStatus(state: string, stage: string, touchLevel: string): CaseStatus {
+  const s = (state ?? '').toLowerCase();
+  const st = (stage ?? '').toLowerCase();
+  const t = (touchLevel ?? '').toLowerCase();
+  if (s.includes('nigo') || s.includes('not in good') || st.includes('nigo')) return 'NIGO';
+  // Closed / resolved / approved states (numeric 5=resolved, 7=closed or display text)
+  if (s === '5' || s === '7' || s.includes('closed') || s.includes('resolved') || s.includes('approv') || s.includes('complet')) {
     return t.includes('stp') ? 'STP_AUTO' : 'APPROVED';
   }
-  if (t.includes('stp')) return 'STP_AUTO';
+  if (t.includes('stp') || st.includes('stp')) return 'STP_AUTO';
   return 'IN_REVIEW';
 }
 
@@ -121,7 +125,7 @@ function buildLivePipeline(cases: SNCase[]) {
   const counts = { STP: 0, LOW: 0, MODERATE: 0, HIGH: 0, NIGO: 0 };
   cases.forEach((c) => {
     const tl = normaliseTouchLevel(c.touch_level);
-    const st = normaliseStatus(c.state, c.touch_level);
+    const st = normaliseStatus(c.state, c.stage, c.touch_level);
     if (st === 'NIGO') counts.NIGO++;
     else counts[tl]++;
   });
@@ -190,22 +194,28 @@ export function DashboardPage() {
   // Live ServiceNow data
   const [liveCases, setLiveCases] = useState<SNCase[] | null>(null);
   const [dataLoading, setDataLoading] = useState(false);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   // Fetch records visible to the authenticated user — ServiceNow ACLs govern scope.
   // Global domain admins will see all records; domain-separated users see their domain only.
   // When logged out, liveCases is null and mock data is displayed instead.
   useEffect(() => {
-    if (!isAuthenticated) { setLiveCases(null); return; }
+    if (!isAuthenticated) { setLiveCases(null); setDataError(null); return; }
     setDataLoading(true);
+    setDataError(null);
     snGet<{ result: SNCase[] }>('/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals', {
       sysparm_limit: '50',
       sysparm_query: 'active=true',
       sysparm_orderby: 'sys_created_on',
       sysparm_order: 'desc',
-      sysparm_fields: 'sys_id,number,state,sys_created_on,transaction_type,touch_level,policy_number,owner_name,channel_source',
+      sysparm_display_value: 'true',
+      sysparm_fields: 'sys_id,number,state,stage,sys_created_on,transaction_type,touch_level,policy_number,opened_by,contact_type',
     })
       .then((data) => setLiveCases(data.result ?? []))
-      .catch(() => setLiveCases([]))
+      .catch((err: unknown) => {
+        setDataError(err instanceof Error ? err.message : 'Failed to load data from ServiceNow');
+        setLiveCases([]);
+      })
       .finally(() => setDataLoading(false));
   }, [isAuthenticated]);
 
@@ -306,6 +316,17 @@ export function DashboardPage() {
           Triage Engine
         </Button>
       </Box>
+
+      {/* ── Data error banner ───────────────────────────────────────────── */}
+      {dataError && (
+        <Box sx={{ mb: 2.5, px: 2, py: 1.5, backgroundColor: '#fff7ed', border: '1px solid rgba(234,88,12,0.25)', borderRadius: '12px', display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
+          <ErrorOutlineIcon sx={{ color: '#ea580c', fontSize: 18, mt: '1px', flexShrink: 0 }} />
+          <Box>
+            <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#9a3412' }}>ServiceNow data error</Typography>
+            <Typography sx={{ fontSize: '0.78rem', color: '#c2410c', mt: 0.25 }}>{dataError}</Typography>
+          </Box>
+        </Box>
+      )}
 
       {/* ── KPI cards ───────────────────────────────────────────────────── */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
@@ -469,17 +490,17 @@ export function DashboardPage() {
                   {/* Live SN rows */}
                   {isAuthenticated && liveCases && liveCases.slice(0, 7).map((c) => {
                     const tl = normaliseTouchLevel(c.touch_level);
-                    const st = normaliseStatus(c.state, c.touch_level);
+                    const st = normaliseStatus(c.state, c.stage, c.touch_level);
                     const stCfg = STATUS_CONFIG[st];
                     return (
                       <TableRow key={c.sys_id} sx={{ '&:hover': { backgroundColor: 'rgba(73,149,255,0.04)', cursor: 'pointer' } }} onClick={() => navigate('/intake')}>
                         <TableCell sx={{ py: 1.25, fontFamily: 'monospace', fontSize: '0.78rem', fontWeight: 700, color: DXC.trueBlue, whiteSpace: 'nowrap' }}>{c.number}</TableCell>
                         <TableCell sx={{ py: 1.25, fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{c.policy_number || '—'}</TableCell>
-                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{c.owner_name || '—'}</TableCell>
-                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{c.transaction_type || '—'}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{c.opened_by || '—'}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{c.transaction_type || c.stage || '—'}</TableCell>
                         <TableCell sx={{ py: 1.25 }}><TouchLevelBadge level={tl} /></TableCell>
                         <TableCell sx={{ py: 1.25 }}><Chip label={stCfg.label} size="small" sx={{ backgroundColor: stCfg.bg, color: stCfg.color, fontWeight: 700, fontSize: '0.65rem', height: 20 }} /></TableCell>
-                        <TableCell sx={{ py: 1.25, fontSize: '0.75rem', color: 'rgba(14,16,32,0.55)', whiteSpace: 'nowrap' }}>{c.channel_source || '—'}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontSize: '0.75rem', color: 'rgba(14,16,32,0.55)', whiteSpace: 'nowrap' }}>{c.contact_type || '—'}</TableCell>
                         <TableCell sx={{ py: 1.25, fontSize: '0.72rem', color: 'rgba(14,16,32,0.4)', whiteSpace: 'nowrap' }}>{snTimeAgo(c.sys_created_on)}</TableCell>
                         <TableCell sx={{ py: 1.25 }}><Tooltip title="Open case" arrow><IconButton size="small" sx={{ color: 'rgba(14,16,32,0.3)', '&:hover': { color: DXC.trueBlue } }}><OpenInNewIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip></TableCell>
                       </TableRow>
