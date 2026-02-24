@@ -24,6 +24,7 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  CircularProgress,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
@@ -32,8 +33,11 @@ import HistoryIcon from '@mui/icons-material/History';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import GavelIcon from '@mui/icons-material/Gavel';
 import { useCase } from '../context/CaseContext';
+import { useAuth } from '../context/AuthContext';
+import { snPatch } from '../services/snApiClient';
 import { TriageDecisionCard } from '../components/shared/TriageDecisionCard';
 import { ConfidenceBadge } from '../components/shared/ConfidenceBadge';
+import { DigitalSynopsis } from '../components/shared/DigitalSynopsis';
 import { DXC } from '../theme/dxcTheme';
 
 function formatTs(iso: string) {
@@ -49,16 +53,19 @@ export function HighTouchPage() {
     policyEntities,
     workflowEvents,
     triageResult,
-    activeCase,
     addWorkflowEvent,
     scenario,
+    snSysId,
+    snCaseNumber,
   } = useCase();
+  const { isAuthenticated } = useAuth();
 
   const [loanAmount, setLoanAmount] = useState(75000);
   const [interestRate] = useState(5.5);
   const [action, setAction] = useState<string>('');
   const [actionNotes, setActionNotes] = useState('');
   const [approved, setApproved] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
 
   if (!triageResult) {
     return (
@@ -86,10 +93,34 @@ export function HighTouchPage() {
   const netDistribution = withdrawalAmount - federalWH;
   const freeWDRemaining = 18000 - withdrawalAmount;
 
-  const handleApprove = () => {
+  const handleApprove = async () => {
     if (!actionNotes.trim() && action !== 'APPROVE') return;
     setApproved(true);
     addWorkflowEvent('CASE_APPROVED', `High-touch review complete. Action: ${action}. Notes: ${actionNotes}`);
+    if (snSysId && isAuthenticated) {
+      setActionLoading(true);
+      try {
+        const patchBody: Record<string, string> = {};
+        if (action === 'APPROVE' || action === 'APPROVE_WITH_MOD') {
+          patchBody.state = 'Resolved'; patchBody.stage = 'Resolution';
+        } else if (action === 'REJECT') {
+          patchBody.state = 'Closed Incomplete'; patchBody.stage = 'Resolution';
+        } else if (action === 'RETURN_NIGO') {
+          patchBody.state = 'Pending'; patchBody.stage = 'Validation';
+        } else if (action === 'SUPERVISOR') {
+          patchBody.state = 'Work in progress'; patchBody.stage = 'Review';
+        }
+        const result = await snPatch<{ result: { sys_id: string; number: string } }>(
+          `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+          patchBody
+        );
+        console.log('[HighTouch] PATCH action:', action, '— sys_id:', result?.result?.sys_id, 'number:', result?.result?.number);
+      } catch (err) {
+        console.error('[HighTouch] PATCH failed:', err);
+      } finally {
+        setActionLoading(false);
+      }
+    }
     setTimeout(() => navigate('/confirmation'), 1200);
   };
 
@@ -116,6 +147,13 @@ export function HighTouchPage() {
             size="small"
             sx={{ backgroundColor: '#fee2e2', color: DXC.red, fontWeight: 700, fontSize: '0.68rem', height: 22 }}
           />
+          {snCaseNumber && (
+            <Chip
+              label={snCaseNumber}
+              size="small"
+              sx={{ backgroundColor: '#f0fdf4', color: DXC.stp, fontWeight: 700, fontSize: '0.68rem', height: 22, border: `1px solid ${DXC.stp}33` }}
+            />
+          )}
         </Box>
         <Typography variant="body2" sx={{ color: 'rgba(14,16,32,0.55)' }}>
           Full manual review — document viewer, entity comparison, financial calculator, and action panel.
@@ -130,6 +168,8 @@ export function HighTouchPage() {
           <Typography sx={{ fontWeight: 700, color: '#0E1020' }}>Case approved — submitting to admin system</Typography>
         </Alert>
       )}
+
+      <DigitalSynopsis />
 
       {/* Four-panel layout */}
       <Grid container spacing={2.5}>
@@ -394,9 +434,9 @@ export function HighTouchPage() {
               <Button
                 variant="contained"
                 fullWidth
-                endIcon={<ArrowForwardIcon />}
+                endIcon={actionLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : <ArrowForwardIcon />}
                 onClick={handleApprove}
-                disabled={!action || approved}
+                disabled={!action || approved || actionLoading}
                 sx={{
                   mb: 2,
                   py: 1.25,

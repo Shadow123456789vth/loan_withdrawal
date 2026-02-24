@@ -204,14 +204,23 @@ export function evaluateDecisionTable(
 
 // Pre-built test value sets matching the two demo scenarios
 export const LOAN_TEST_VALUES: Record<string, string> = {
-  loan_amount_pct_of_max: '68', // $75k / $110k max
-  policy_status: 'Active',
-  idp_confidence_avg: '92',
-  existing_loan_balance: '$10,000.00',
+  // STP eligibility checks
+  mec_indicator:          'No',           // Not a Modified Endowment Contract
+  irrev_beneficiary:      'None',         // No irrevocable beneficiary
+  collateral_assignment:  'None',         // No collateral assignment
+  address_change_days:    '15',           // Address changed 15 days ago → STP flag (≤30)
+  // Amount & policy checks
+  loan_amount_pct_of_max: '68',           // $75k / $110k max = 68%
+  policy_status:          'Active',
+  idp_confidence_avg:     '92',
 };
 
 export const WITHDRAWAL_TEST_VALUES: Record<string, string> = {
-  within_free_corridor: 'Yes',
-  policy_status: 'Active',
-  idp_confidence_avg: '97',
+  // STP eligibility checks
+  mec_indicator:        'No',             // Not a MEC
+  irrev_beneficiary:    'None',           // No irrevocable beneficiary
+  // Amount & policy checks
+  within_free_corridor: 'Yes',            // $5k within $18k free corridor
+  policy_status:        'Active',
+  idp_confidence_avg:   '97',
 };

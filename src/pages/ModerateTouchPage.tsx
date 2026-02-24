@@ -17,6 +17,7 @@ import {
   TextField,
   Alert,
   LinearProgress,
+  CircularProgress,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
@@ -25,7 +26,10 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import EscalateIcon from '@mui/icons-material/KeyboardDoubleArrowUp';
 import SendIcon from '@mui/icons-material/Send';
 import { useCase } from '../context/CaseContext';
+import { useAuth } from '../context/AuthContext';
+import { snPatch } from '../services/snApiClient';
 import { TriageDecisionCard } from '../components/shared/TriageDecisionCard';
+import { DigitalSynopsis } from '../components/shared/DigitalSynopsis';
 import { DXC } from '../theme/dxcTheme';
 
 type FlagItem = {
@@ -86,7 +90,8 @@ function buildFlaggedItems(scenario: string): FlagItem[] {
 
 export function ModerateTouchPage() {
   const navigate = useNavigate();
-  const { activeCase, goodOrderChecks, updateGoodOrderCheck, triageResult, addWorkflowEvent, scenario } = useCase();
+  const { goodOrderChecks, updateGoodOrderCheck, triageResult, addWorkflowEvent, scenario, snSysId, snCaseNumber } = useCase();
+  const { isAuthenticated } = useAuth();
 
   const [flagItems, setFlagItems] = useState<FlagItem[]>(buildFlaggedItems(scenario));
   const [nigoReason, setNigoReason] = useState('');
@@ -94,6 +99,7 @@ export function ModerateTouchPage() {
   const [showNigo, setShowNigo] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
   const [approved, setApproved] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
 
   if (!triageResult) {
     return (
@@ -121,19 +127,55 @@ export function ModerateTouchPage() {
 
   const canApprove = allFlagsResolved && checklistComplete;
 
-  const handleApprove = () => {
+  const handleApprove = async () => {
     setApproved(true);
     addWorkflowEvent('CASE_APPROVED', `Moderate-touch review complete. All flagged items resolved. Case approved.`);
+    if (snSysId && isAuthenticated) {
+      setActionLoading(true);
+      try {
+        const result = await snPatch<{ result: { sys_id: string; number: string } }>(
+          `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+          { state: 'Resolved', stage: 'Resolution' }
+        );
+        console.log('[ModerateTouch] PATCH approved — sys_id:', result?.result?.sys_id, 'number:', result?.result?.number);
+      } catch (err) {
+        console.error('[ModerateTouch] PATCH failed:', err);
+      } finally {
+        setActionLoading(false);
+      }
+    }
     setTimeout(() => navigate('/confirmation'), 1200);
   };
 
-  const handleEscalate = () => {
+  const handleEscalate = async () => {
     addWorkflowEvent('ESCALATED', `Case escalated to High Touch. Reason: ${escalateReason}`);
+    if (snSysId && isAuthenticated) {
+      try {
+        const result = await snPatch<{ result: { sys_id: string; number: string } }>(
+          `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+          { touch_level: 'HIGH', stage: 'Triage' }
+        );
+        console.log('[ModerateTouch] PATCH escalate — sys_id:', result?.result?.sys_id);
+      } catch (err) {
+        console.error('[ModerateTouch] PATCH escalate failed:', err);
+      }
+    }
     navigate('/processing/high');
   };
 
-  const handleNigo = () => {
+  const handleNigo = async () => {
     addWorkflowEvent('NIGO_SENT', `NIGO correspondence sent to customer. Reason: ${nigoReason}`);
+    if (snSysId && isAuthenticated) {
+      try {
+        const result = await snPatch<{ result: { sys_id: string; number: string } }>(
+          `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+          { state: 'Pending', stage: 'Validation' }
+        );
+        console.log('[ModerateTouch] PATCH NIGO — sys_id:', result?.result?.sys_id);
+      } catch (err) {
+        console.error('[ModerateTouch] PATCH NIGO failed:', err);
+      }
+    }
     setShowNigo(false);
   };
 
@@ -160,6 +202,13 @@ export function ModerateTouchPage() {
             size="small"
             sx={{ backgroundColor: '#fef9c3', color: '#b45309', fontWeight: 700, fontSize: '0.68rem', height: 22 }}
           />
+          {snCaseNumber && (
+            <Chip
+              label={snCaseNumber}
+              size="small"
+              sx={{ backgroundColor: '#f0fdf4', color: DXC.stp, fontWeight: 700, fontSize: '0.68rem', height: 22, border: `1px solid ${DXC.stp}33` }}
+            />
+          )}
         </Box>
         <Typography variant="body2" sx={{ color: 'rgba(14,16,32,0.55)' }}>
           Review flagged items, confirm good-order checks, and approve or escalate.
@@ -174,6 +223,8 @@ export function ModerateTouchPage() {
           <Typography sx={{ fontWeight: 700, color: '#0E1020' }}>Case approved — submitting to admin system</Typography>
         </Alert>
       )}
+
+      <DigitalSynopsis />
 
       <Grid container spacing={3}>
         {/* Left: Flagged Items */}
@@ -433,9 +484,9 @@ export function ModerateTouchPage() {
                 variant="contained"
                 fullWidth
                 size="large"
-                endIcon={<CheckCircleIcon />}
+                endIcon={actionLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : <CheckCircleIcon />}
                 onClick={handleApprove}
-                disabled={!canApprove || approved}
+                disabled={!canApprove || approved || actionLoading}
                 sx={{
                   mb: 1.5,
                   py: 1.5,

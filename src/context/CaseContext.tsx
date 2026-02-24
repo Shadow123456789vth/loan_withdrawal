@@ -45,18 +45,40 @@ interface CaseContextValue {
   getValidationProgress: () => { validated: number; total: number; pct: number };
   updateGoodOrderCheck: (id: string, status: 'pass' | 'fail' | 'pending') => void;
   resetScenario: () => void;
+  // Live SN case — set after intake form creates a record in ServiceNow
+  snSysId: string | null;
+  snCaseNumber: string | null;
+  setSNCase: (sysId: string, caseNumber: string) => void;
+  // Override IDP entity extracted values with values fetched from ServiceNow
+  hydrateSNFields: (snFields: Record<string, string>) => void;
 }
 
 const CaseContext = createContext<CaseContextValue | null>(null);
 
+// Withdrawal IGO Checklist — 14 criteria from Wilton Reassurance Withdrawal Visio
 function buildWithdrawalGoodOrderChecks(): GoodOrderCheck[] {
   return [
-    { id: 'GOC-001', description: 'Contract is in Active status', status: 'pass', required: true, category: 'Eligibility' },
-    { id: 'GOC-002', description: 'Withdrawal amount is within free withdrawal corridor', status: 'pass', required: true, category: 'Financial Validation' },
-    { id: 'GOC-003', description: 'Owner identity verified against contract records', status: 'pass', required: true, category: 'Identity' },
-    { id: 'GOC-004', description: 'Owner signature present and dated within 90 days', status: 'pass', required: true, category: 'Signature' },
-    { id: 'GOC-005', description: 'Valid disbursement method provided', status: 'pass', required: true, category: 'Payment' },
-    { id: 'GOC-006', description: 'Tax withholding election present', status: 'pass', required: true, category: 'Tax' },
+    // Contract Identification
+    { id: 'GOC-001', description: 'Contract number present and matches records', status: 'pass', required: true, category: 'Contract Identification' },
+    // Identity
+    { id: 'GOC-002', description: "Owner name on form matches contract owner of record", status: 'pass', required: true, category: 'Identity' },
+    { id: 'GOC-003', description: 'Owner SSN / TIN last 4 digits match contract records', status: 'pass', required: true, category: 'Identity' },
+    // Distribution Selection
+    { id: 'GOC-004', description: 'Full surrender or partial withdrawal clearly indicated (not both)', status: 'pass', required: true, category: 'Distribution' },
+    { id: 'GOC-005', description: 'Distribution option clearly selected (one option only)', status: 'pass', required: true, category: 'Distribution' },
+    { id: 'GOC-006', description: 'Dollar amount provided for specified amount option (Option 4)', status: 'pass', required: true, category: 'Distribution' },
+    { id: 'GOC-007', description: 'Net or gross election present for specified amount withdrawal', status: 'pass', required: true, category: 'Distribution' },
+    // Payment
+    { id: 'GOC-008', description: 'Payment method selected (check / bank on file / direct deposit)', status: 'pass', required: true, category: 'Payment' },
+    { id: 'GOC-009', description: 'ABA routing and account numbers provided for direct deposit', status: 'pass', required: true, category: 'Payment' },
+    // Tax
+    { id: 'GOC-010', description: 'Federal withholding election present', status: 'pass', required: true, category: 'Tax' },
+    { id: 'GOC-011', description: 'Owner SSN / TIN provided for tax reporting', status: 'pass', required: true, category: 'Tax' },
+    // Signature
+    { id: 'GOC-012', description: 'Owner signature present in designated signature field', status: 'pass', required: true, category: 'Signature' },
+    { id: 'GOC-013', description: 'Signature date within 6 months of receipt and not future-dated', status: 'pass', required: true, category: 'Signature' },
+    // Form Integrity
+    { id: 'GOC-014', description: 'Form completed in ink with no alterations or white-out', status: 'pending', required: true, category: 'Form Integrity', notes: 'Manual visual inspection required — original document on file' },
   ];
 }
 
@@ -66,10 +88,19 @@ export function CaseProvider({ children }: { children: React.ReactNode }) {
   const [workflowEvents, setWorkflowEvents] = useState<WorkflowEvent[]>([...LOAN_WORKFLOW_EVENTS]);
   const [triageResult, setTriageResult] = useState<TriageResult | null>(null);
   const [goodOrderChecks, setGoodOrderChecks] = useState<GoodOrderCheck[]>([...LOAN_GOOD_ORDER_CHECKS]);
+  const [snSysId, setSnSysId] = useState<string | null>(null);
+  const [snCaseNumber, setSnCaseNumber] = useState<string | null>(null);
+
+  const setSNCase = useCallback((sysId: string, caseNumber: string) => {
+    setSnSysId(sysId);
+    setSnCaseNumber(caseNumber);
+  }, []);
 
   const setScenario = useCallback((s: DemoScenario) => {
     setScenarioState(s);
     setTriageResult(null);
+    setSnSysId(null);
+    setSnCaseNumber(null);
     if (s === 'loan') {
       setIDPEntities([...LOAN_IDP_ENTITIES]);
       setWorkflowEvents([...LOAN_WORKFLOW_EVENTS]);
@@ -130,6 +161,21 @@ export function CaseProvider({ children }: { children: React.ReactNode }) {
     setScenario(scenario);
   }, [scenario, setScenario]);
 
+  /**
+   * Override IDP entity extractedValues with values loaded from ServiceNow.
+   * Only updates entities whose fieldName appears as a key in `snFields`.
+   * Empty/blank SN values are ignored so mock fallbacks remain intact.
+   */
+  const hydrateSNFields = useCallback((snFields: Record<string, string>) => {
+    setIDPEntities((prev) =>
+      prev.map((e) => {
+        const snVal = snFields[e.fieldName];
+        if (!snVal || !snVal.trim()) return e;
+        return { ...e, extractedValue: snVal };
+      })
+    );
+  }, []);
+
   const activeCase = scenario === 'loan' ? LOAN_CASE : WITHDRAWAL_CASE;
   const policyEntities = scenario === 'loan' ? LOAN_POLICY_ENTITIES : WITHDRAWAL_POLICY_ENTITIES;
   const documents = scenario === 'loan' ? LOAN_DOCUMENTS : WITHDRAWAL_DOCUMENTS;
@@ -155,6 +201,10 @@ export function CaseProvider({ children }: { children: React.ReactNode }) {
         getValidationProgress,
         updateGoodOrderCheck,
         resetScenario,
+        snSysId,
+        snCaseNumber,
+        setSNCase,
+        hydrateSNFields,
       }}
     >
       {children}

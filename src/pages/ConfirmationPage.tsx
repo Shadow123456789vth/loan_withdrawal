@@ -23,7 +23,9 @@ import { DXC } from '../theme/dxcTheme';
 
 export function ConfirmationPage() {
   const navigate = useNavigate();
-  const { activeCase, triageResult, workflowEvents, scenario, resetScenario } = useCase();
+  const { activeCase, triageResult, workflowEvents, scenario, resetScenario, snCaseNumber } = useCase();
+
+  const displayCaseId = snCaseNumber ?? activeCase.id;
 
   const isLoan = scenario === 'loan';
 
@@ -129,8 +131,17 @@ export function ConfirmationPage() {
             </Box>
             <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.15)' }} />
             <Box>
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.45)', mb: 0.25 }}>Case</Typography>
-              <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: DXC.white }}>{activeCase.id}</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.25 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.45)' }}>Case</Typography>
+                {snCaseNumber && (
+                  <Chip
+                    label="ServiceNow"
+                    size="small"
+                    sx={{ height: 16, fontSize: '0.58rem', fontWeight: 700, backgroundColor: 'rgba(73,149,255,0.25)', color: DXC.sky, letterSpacing: '0.03em' }}
+                  />
+                )}
+              </Box>
+              <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: DXC.white }}>{displayCaseId}</Typography>
             </Box>
             <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.15)' }} />
             {triageResult && <TouchLevelBadge level={triageResult.touchLevel} />}
@@ -163,7 +174,7 @@ export function ConfirmationPage() {
                 Transaction Summary
               </Typography>
               {[
-                { label: 'Case ID', value: activeCase.id },
+                { label: 'Case ID', value: displayCaseId },
                 { label: 'Policy / Contract', value: activeCase.policyNumber },
                 { label: 'Owner', value: activeCase.ownerName },
                 { label: 'Transaction Type', value: activeCase.transactionType },

@@ -188,7 +188,7 @@ export function AppShell({ children }: Props) {
         <ToggleButtonGroup
           value={scenario}
           exclusive
-          onChange={(_, v) => v && setScenario(v)}
+          onChange={(_, v) => { if (v) { setScenario(v); navigate('/'); } }}
           size="small"
           fullWidth
           sx={{
@@ -399,13 +399,6 @@ export function AppShell({ children }: Props) {
         >
           {/* App name */}
           <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            <Box
-              component="img"
-              src={dxcLogo}
-              alt="DXC Technology"
-              sx={{ height: 22, width: 'auto', objectFit: 'contain', flexShrink: 0, filter: 'brightness(0) invert(1)' }}
-            />
-            <Box sx={{ width: 1, height: 18, borderLeft: '1px solid rgba(255,255,255,0.15)' }} />
             <Typography
               sx={{
                 fontFamily: '"GT Standard Extended", "Arial Black", sans-serif',
@@ -529,27 +522,11 @@ export function AppShell({ children }: Props) {
             display: currentPath === '/' ? 'none' : 'flex',
             alignItems: 'center',
             gap: 2,
-            flexWrap: 'wrap',
+            flexWrap: 'nowrap',
+            overflow: 'hidden',
           }}
         >
-          {/* DXC logo — white on dark background */}
-          <Box
-            component="img"
-            src={dxcLogo}
-            alt="DXC Technology"
-            sx={{
-              height: 26,
-              width: 'auto',
-              objectFit: 'contain',
-              objectPosition: 'left center',
-              display: 'block',
-              flexShrink: 0,
-              filter: 'brightness(0) invert(1)',
-            }}
-          />
-          <Box sx={{ width: 1, height: 22, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
             <Typography variant="overline" sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem' }}>
               Case ID
             </Typography>
@@ -558,9 +535,9 @@ export function AppShell({ children }: Props) {
             </Typography>
           </Box>
 
-          <Box sx={{ width: 1, height: 18, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
+          <Box sx={{ width: '1px', height: 18, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
             <Typography variant="overline" sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem' }}>
               Policy
             </Typography>
@@ -569,9 +546,9 @@ export function AppShell({ children }: Props) {
             </Typography>
           </Box>
 
-          <Box sx={{ width: 1, height: 18, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
+          <Box sx={{ width: '1px', height: 18, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
             <Typography variant="overline" sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem' }}>
               Owner
             </Typography>
@@ -580,12 +557,13 @@ export function AppShell({ children }: Props) {
             </Typography>
           </Box>
 
-          <Box sx={{ width: 1, height: 18, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
+          <Box sx={{ width: '1px', height: 18, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
 
           <Chip
             label={activeCase.transactionType}
             size="small"
             sx={{
+              flexShrink: 0,
               backgroundColor: 'rgba(73,149,255,0.2)',
               color: DXC.sky,
               fontWeight: 700,
@@ -595,12 +573,13 @@ export function AppShell({ children }: Props) {
             }}
           />
 
-          <Box sx={{ width: 1, height: 18, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
+          <Box sx={{ width: '1px', height: 18, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
 
           <Chip
             label={activeCase.channelSource}
             size="small"
             sx={{
+              flexShrink: 0,
               backgroundColor: 'rgba(255,255,255,0.08)',
               color: 'rgba(255,255,255,0.7)',
               fontWeight: 600,
@@ -613,7 +592,7 @@ export function AppShell({ children }: Props) {
 
           {triageResult && (
             <>
-              <Box sx={{ width: 1, height: 18, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
+              <Box sx={{ width: '1px', height: 18, flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.12)' }} />
               <TouchLevelBadge level={triageResult.touchLevel} />
             </>
           )}
