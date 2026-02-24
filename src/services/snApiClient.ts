@@ -18,7 +18,7 @@ const isDev = import.meta.env.DEV;
  */
 function buildURL(snPath: string, params?: Record<string, string>): string {
   // Append SN query params directly onto the path
-  const url = new URL(`https://placeholder${snPath}`);
+  const url = new URL(`https://servicenow.invalid${snPath}`);
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   const fullPath = url.pathname + url.search;
 

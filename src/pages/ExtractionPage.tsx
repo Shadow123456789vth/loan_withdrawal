@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -31,8 +31,28 @@ import SyncAltIcon from '@mui/icons-material/SyncAlt';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { IDPEntity, IDPFieldGroup, MatchStatus } from '../types/entities';
 import { useCase } from '../context/CaseContext';
+import { useAuth } from '../context/AuthContext';
+import { snGet, snPatch } from '../services/snApiClient';
 import { ConfidenceBadge } from '../components/shared/ConfidenceBadge';
 import { DXC } from '../theme/dxcTheme';
+import LinkIcon from '@mui/icons-material/Link';
+import CircularProgress from '@mui/material/CircularProgress';
+
+interface SNCase {
+  sys_id: string;
+  number: string;
+  state: string;
+  stage: string;
+  contact_type: string;
+  transaction_type: string;
+  policy_number: string;
+  short_description: string;
+  // Form data fields set at Intake — replace mock IDP values
+  owner_name: string;
+  requested_amount: string;
+  payment_method: string;
+  federal_withholding: string;
+}
 
 const GROUP_LABELS: Record<IDPFieldGroup, string> = {
   identity: 'Identity & Signature',
@@ -223,8 +243,14 @@ function EntityRow({
 }
 
 // Simulated loan form document
-function DocumentViewer({ transactionType }: { transactionType: string }) {
+function DocumentViewer({ transactionType, policyNumber, ownerName }: {
+  transactionType: string;
+  policyNumber?: string;
+  ownerName?: string;
+}) {
   const isWithdrawal = transactionType.toLowerCase().includes('withdrawal');
+  const displayPolicy = policyNumber || (isWithdrawal ? 'ANN-2024-034891' : 'LF-2024-089423');
+  const displayOwner  = ownerName    || (isWithdrawal ? 'Patricia M. Chen' : 'James R. Whitfield');
   return (
     <Box
       sx={{
@@ -268,10 +294,10 @@ function DocumentViewer({ transactionType }: { transactionType: string }) {
           </Typography>
           <Grid container spacing={1.5}>
             {[
-              { label: 'Policy / Contract No.', value: isWithdrawal ? 'ANN-2024-034891' : 'LF-2024-089423' },
-              { label: 'Owner Name', value: isWithdrawal ? 'Patricia M. Chen' : 'James R. Whitfield' },
-              { label: 'Owner SSN (Last 4)', value: isWithdrawal ? '4217' : '7823' },
-              { label: 'Date of Birth', value: isWithdrawal ? '05/08/1955' : '09/12/1962' },
+              { label: 'Policy / Contract No.', value: displayPolicy },
+              { label: 'Owner Name',             value: displayOwner },
+              { label: 'Owner SSN (Last 4)',      value: isWithdrawal ? '4217' : '7823' },
+              { label: 'Date of Birth',           value: isWithdrawal ? '05/08/1955' : '09/12/1962' },
             ].map((field) => (
               <Grid item xs={6} key={field.label}>
                 <Box sx={{ borderBottom: '1px solid #ccc', pb: 0.5 }}>
@@ -344,7 +370,7 @@ function DocumentViewer({ transactionType }: { transactionType: string }) {
           <Box sx={{ flex: 2 }}>
             <Box sx={{ borderBottom: '1px solid #0E1020', mb: 0.5, height: 28 }}>
               <Typography sx={{ fontSize: '0.75rem', fontStyle: 'italic', fontFamily: 'Georgia, serif', color: 'rgba(14,16,32,0.7)' }}>
-                {isWithdrawal ? 'P. M. Chen' : 'J. R. Whitfield'}
+                {displayOwner.split(' ').map((p, i, a) => i === 0 ? p[0] + '.' : i === a.length - 1 ? p : '').filter(Boolean).join(' ')}
               </Typography>
             </Box>
             <Typography sx={{ fontSize: '0.62rem', color: 'rgba(14,16,32,0.45)', fontFamily: 'Georgia, serif' }}>Owner Signature</Typography>
@@ -373,10 +399,59 @@ export function ExtractionPage() {
     getValidationProgress,
     addWorkflowEvent,
     scenario,
+    snSysId,
+    snCaseNumber,
+    hydrateSNFields,
   } = useCase();
+  const { isAuthenticated } = useAuth();
+
+  // Live SN case data
+  const [snCase, setSnCase] = useState<SNCase | null>(null);
+  const [caseLoading, setCaseLoading] = useState(false);
+  const [patching, setPatching] = useState(false);
+
+  useEffect(() => {
+    if (!snSysId || !isAuthenticated) return;
+    setCaseLoading(true);
+    snGet<{ result: SNCase }>(
+      `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+      {
+        sysparm_fields: 'sys_id,number,state,stage,contact_type,transaction_type,policy_number,short_description,owner_name,requested_amount,payment_method,federal_withholding',
+        sysparm_display_value: 'true',
+      },
+    )
+      .then((d) => {
+        setSnCase(d.result);
+
+        // Build SN→IDP field map and hydrate extraction entities.
+        // `federal_withholding` in SN maps to `tax_withholding_federal` in IDP.
+        // Only non-empty values are forwarded; mock values remain as fallback.
+        const raw = d.result;
+        const snFieldMap: Record<string, string> = {
+          policy_number:        raw.policy_number,
+          owner_name:           raw.owner_name,
+          requested_amount:     raw.requested_amount,
+          payment_method:       raw.payment_method,
+          tax_withholding_federal: raw.federal_withholding,
+        };
+        const populated = Object.fromEntries(
+          Object.entries(snFieldMap).filter(([, v]) => Boolean(v && v.trim()))
+        );
+        if (Object.keys(populated).length > 0) {
+          hydrateSNFields(populated);
+        }
+      })
+      .catch(() => setSnCase(null))
+      .finally(() => setCaseLoading(false));
+  }, [snSysId, isAuthenticated, hydrateSNFields]);
 
   const progress = getValidationProgress();
   const threshold = scenario === 'withdrawal' ? 95 : 90;
+
+  // Derive display values — prefer live SN data, fall back to mock
+  const displayTxnType  = snCase?.transaction_type  || activeCase.transactionType;
+  const displayPolicy   = snCase?.policy_number     || activeCase.policyNumber;
+  const displayCaseNum  = snCaseNumber               || activeCase.id;
 
   const groups = (['identity', 'financial', 'payment', 'tax'] as IDPFieldGroup[]).map((g) => ({
     group: g,
@@ -387,8 +462,22 @@ export function ExtractionPage() {
   const flaggedCount = idpEntities.filter((e) => e.confidenceScore < threshold && !e.validated).length;
   const mismatches = idpEntities.filter((e) => e.matchStatus === 'mismatch').length;
 
-  const handleCompleteValidation = () => {
+  const handleCompleteValidation = async () => {
     addWorkflowEvent('VALIDATION_COMPLETE', `All required fields validated. ${idpEntities.filter((e) => e.corrected).length} correction(s) logged.`);
+    if (snSysId && isAuthenticated) {
+      setPatching(true);
+      try {
+        const result = await snPatch<{ result: { sys_id: string; number: string } }>(
+          `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+          { stage: 'Validation', state: 'Work in progress' }
+        );
+        console.log('[Extraction] PATCH validation — sys_id:', result?.result?.sys_id, 'number:', result?.result?.number);
+      } catch (err) {
+        console.error('[Extraction] PATCH failed:', err);
+        /* non-blocking — proceed to triage regardless */
+      }
+      finally { setPatching(false); }
+    }
     navigate('/triage');
   };
 
@@ -397,22 +486,35 @@ export function ExtractionPage() {
       {/* Page header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 3 }}>
         <Box>
-          <Typography
-            variant="h4"
-            sx={{
-              fontFamily: '"GT Standard Extended", "Arial Black", sans-serif',
-              fontWeight: 700,
-              fontSize: '1.4rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              color: DXC.midnightBlue,
-              mb: 0.5,
-            }}
-          >
-            IDP Extraction & Validation
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.75 }}>
+            <Typography
+              variant="h4"
+              sx={{
+                fontFamily: '"GT Standard Extended", "Arial Black", sans-serif',
+                fontWeight: 700,
+                fontSize: '1.4rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                color: DXC.midnightBlue,
+              }}
+            >
+              IDP Extraction & Validation
+            </Typography>
+            {snCaseNumber && (
+              <Chip
+                icon={<LinkIcon sx={{ fontSize: '12px !important', color: `${DXC.stp} !important` }} />}
+                label={caseLoading ? 'Loading…' : snCaseNumber}
+                size="small"
+                sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700, fontFamily: 'monospace', backgroundColor: 'rgba(22,163,74,0.08)', color: DXC.stp, border: '1px solid rgba(22,163,74,0.25)' }}
+              />
+            )}
+            {!snCaseNumber && (
+              <Chip label="Demo Mode" size="small" sx={{ height: 20, fontSize: '0.6rem', fontWeight: 600, backgroundColor: 'rgba(14,16,32,0.06)', color: 'rgba(14,16,32,0.45)', border: '1px solid rgba(14,16,32,0.1)' }} />
+            )}
+          </Box>
           <Typography variant="body2" sx={{ color: 'rgba(14,16,32,0.55)' }}>
             Review extracted fields, correct errors, and accept validated values before triage.
+            {snCase?.policy_number && <> · Policy: <strong>{snCase.policy_number}</strong></>}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
@@ -449,7 +551,7 @@ export function ExtractionPage() {
           <LinearProgress variant="determinate" value={progress.pct} />
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.75 }}>
             <Typography sx={{ fontSize: '0.72rem', color: 'rgba(14,16,32,0.45)' }}>
-              Template: {activeCase.transactionType} · Confidence threshold: {threshold}%
+              Template: {displayTxnType} · Confidence threshold: {threshold}%
             </Typography>
             <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: progress.pct === 100 ? DXC.stp : 'rgba(14,16,32,0.55)' }}>
               {progress.pct}% complete
@@ -481,7 +583,10 @@ export function ExtractionPage() {
                   <Chip label="Page 1 of 2" size="small" variant="outlined" sx={{ fontSize: '0.68rem', height: 22 }} />
                 </Box>
               </Box>
-              <DocumentViewer transactionType={activeCase.transactionType} />
+              {caseLoading
+                ? <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress size={24} sx={{ color: DXC.trueBlue }} /></Box>
+                : <DocumentViewer transactionType={displayTxnType} policyNumber={displayPolicy} ownerName={activeCase.ownerName} />
+              }
             </CardContent>
           </Card>
         </Grid>
@@ -575,12 +680,12 @@ export function ExtractionPage() {
               variant="contained"
               size="large"
               fullWidth
-              endIcon={<ArrowForwardIcon />}
+              endIcon={patching ? <CircularProgress size={16} sx={{ color: 'inherit' }} /> : <ArrowForwardIcon />}
               onClick={handleCompleteValidation}
-              disabled={progress.pct < 100}
+              disabled={progress.pct < 100 || patching}
               sx={{ py: 1.5 }}
             >
-              Complete Validation &amp; Proceed to Triage
+              {patching ? 'Updating ServiceNow…' : 'Complete Validation & Proceed to Triage'}
             </Button>
           </Box>
         </Grid>

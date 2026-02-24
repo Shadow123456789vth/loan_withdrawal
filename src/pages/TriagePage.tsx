@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -22,6 +22,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  CircularProgress,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -41,11 +42,30 @@ import type {
   TouchLevel,
 } from '../types/entities';
 import { useCase } from '../context/CaseContext';
+import { useAuth } from '../context/AuthContext';
 import { ALL_ENTITY_FIELDS, LOAN_DECISION_TABLE, WITHDRAWAL_DECISION_TABLE } from '../data/mockData';
 import { evaluateDecisionTable, LOAN_TEST_VALUES, WITHDRAWAL_TEST_VALUES } from '../services/triageEngine';
+import { snGet, snPatch } from '../services/snApiClient';
 import { EntitySourceChip } from '../components/shared/EntitySourceChip';
 import { TouchLevelBadge } from '../components/shared/TouchLevelBadge';
 import { DXC } from '../theme/dxcTheme';
+
+type SNRef = string | { display_value?: string; value?: string; link?: string };
+function snVal(v: SNRef | undefined): string {
+  if (!v) return '';
+  if (typeof v === 'string') return v;
+  return v.display_value ?? v.value ?? '';
+}
+
+interface SNTriageCase {
+  sys_id: string;
+  number: SNRef;
+  state: SNRef;
+  stage: SNRef;
+  transaction_type?: SNRef;
+  policy_number?: SNRef;
+  short_description?: SNRef;
+}
 
 const OPERATOR_LABELS: Record<ConditionOperator, string> = {
   eq: '= equals',
@@ -117,7 +137,8 @@ function cloneTable(src: DecisionTable): DecisionTable {
 
 export function TriagePage() {
   const navigate = useNavigate();
-  const { scenario, activeCase, setTriageResult, addWorkflowEvent } = useCase();
+  const { scenario, setTriageResult, addWorkflowEvent, snSysId, snCaseNumber } = useCase();
+  const { isAuthenticated } = useAuth();
 
   const [table, setTable] = useState<DecisionTable>(() =>
     cloneTable(scenario === 'loan' ? LOAN_DECISION_TABLE : WITHDRAWAL_DECISION_TABLE)
@@ -128,6 +149,22 @@ export function TriagePage() {
   );
   const [testResult, setTestResult] = useState<ReturnType<typeof evaluateDecisionTable> | null>(null);
   const [savedMessage, setSavedMessage] = useState(false);
+  const [snCase, setSnCase] = useState<SNTriageCase | null>(null);
+  const [triageLoading, setTriageLoading] = useState(false);
+
+  // Fetch SN case for context display in the CTA
+  useEffect(() => {
+    if (!snSysId || !isAuthenticated) return;
+    snGet<{ result: SNTriageCase }>(
+      `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+      {
+        sysparm_fields: 'sys_id,number,state,stage,transaction_type,policy_number,short_description',
+        sysparm_display_value: 'true',
+      }
+    )
+      .then((d) => setSnCase(d.result))
+      .catch(() => setSnCase(null));
+  }, [snSysId, isAuthenticated]);
 
   const fieldsBySource = {
     IDP: ALL_ENTITY_FIELDS.filter((f) => f.entitySource === 'IDP'),
@@ -236,7 +273,7 @@ export function TriagePage() {
     setTestResult(evaluateDecisionTable(table, testValues));
   };
 
-  const handleRunTriage = () => {
+  const handleRunTriage = async () => {
     const inputs = scenario === 'loan' ? LOAN_TEST_VALUES : WITHDRAWAL_TEST_VALUES;
     const result = evaluateDecisionTable(table, inputs);
     setTriageResult(result);
@@ -244,6 +281,23 @@ export function TriagePage() {
       'TRIAGE_COMPLETE',
       `Triage complete. Touch level: ${result.touchLevel}. Rule matched: ${result.matchedRuleDescription}`
     );
+
+    if (snSysId && isAuthenticated) {
+      setTriageLoading(true);
+      try {
+        const patched = await snPatch<{ result: { sys_id: string; number: string } }>(
+          `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+          { touch_level: result.touchLevel, stage: 'Triage', state: 'Work in progress' }
+        );
+        console.log('[Triage] PATCH touch_level:', result.touchLevel, '— sys_id:', patched?.result?.sys_id, 'number:', patched?.result?.number);
+      } catch (err) {
+        console.error('[Triage] PATCH failed:', err);
+        // non-fatal — proceed even if PATCH fails
+      } finally {
+        setTriageLoading(false);
+      }
+    }
+
     if (result.touchLevel === 'STP' || result.touchLevel === 'LOW') navigate('/processing/low');
     else if (result.touchLevel === 'MODERATE') navigate('/processing/moderate');
     else navigate('/processing/high');
@@ -849,29 +903,49 @@ export function TriagePage() {
         <CardContent sx={{ p: 2.5, '&:last-child': { pb: 2.5 } }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
             <Box>
-              <Typography
-                sx={{
-                  fontFamily: '"GT Standard Extended", "Arial Black", sans-serif',
-                  fontWeight: 500,
-                  fontSize: '0.82rem',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  color: DXC.sky,
-                  mb: 0.25,
-                }}
-              >
-                Run Triage on Active Case
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.25 }}>
+                <Typography
+                  sx={{
+                    fontFamily: '"GT Standard Extended", "Arial Black", sans-serif',
+                    fontWeight: 500,
+                    fontSize: '0.82rem',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    color: DXC.sky,
+                  }}
+                >
+                  Run Triage on Active Case
+                </Typography>
+                {snCaseNumber && (
+                  <Chip
+                    label={snCaseNumber}
+                    size="small"
+                    sx={{
+                      height: 20,
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      backgroundColor: 'rgba(255,255,255,0.12)',
+                      color: 'rgba(255,255,255,0.85)',
+                    }}
+                  />
+                )}
+              </Box>
               <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)' }}>
-                Evaluates {scenario === 'loan' ? 'Demo 1 — Policy Loan ($75K, 68% of max, existing loan)' : 'Demo 2 — Annuity Withdrawal ($5K, within free corridor)'} against the current decision table
+                {snCase
+                  ? `${snVal(snCase.transaction_type) || (scenario === 'loan' ? 'Policy Loan' : 'Annuity Withdrawal')}${snVal(snCase.policy_number) ? ` · Policy ${snVal(snCase.policy_number)}` : ''} — evaluating against current decision table`
+                  : scenario === 'loan'
+                  ? 'Demo 1 — Policy Loan ($75K, 68% of max, existing loan)'
+                  : 'Demo 2 — Annuity Withdrawal ($5K, within free corridor)'}
+                {snCase ? '' : ' · against the current decision table'}
               </Typography>
             </Box>
             <Button
               variant="contained"
               color="primary"
               size="large"
-              endIcon={<ArrowForwardIcon />}
+              endIcon={triageLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : <ArrowForwardIcon />}
               onClick={handleRunTriage}
+              disabled={triageLoading}
               sx={{ py: 1.5, px: 4, backgroundColor: DXC.trueBlue, '&:hover': { backgroundColor: DXC.royalBlue } }}
             >
               Run Triage & Route

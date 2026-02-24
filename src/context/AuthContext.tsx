@@ -108,20 +108,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Build the token request body.
     // In prod the Vercel function supplies client credentials server-side.
     // In dev the Vite proxy is transparent so we include them here.
-    const body: Record<string, string> = { username, password };
+    let tokenRes: Response;
     if (isDev) {
-      body.grant_type = 'password';
-      body.client_id = DEV_CLIENT_ID;
-      body.client_secret = DEV_CLIENT_SECRET;
+      // Dev: Vite proxy forwards directly to ServiceNow /oauth_token.do
+      // ServiceNow requires application/x-www-form-urlencoded for OAuth
       const scope = import.meta.env.VITE_SN_OAUTH_SCOPE as string | undefined;
-      if (scope) body.scope = scope;
+      const formBody = new URLSearchParams({
+        grant_type: 'password',
+        username,
+        password,
+        client_id: DEV_CLIENT_ID,
+        client_secret: DEV_CLIENT_SECRET,
+        ...(scope ? { scope } : {}),
+      });
+      tokenRes = await fetch(OAUTH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formBody,
+      });
+    } else {
+      // Prod: Vercel function receives JSON and handles the SN conversion server-side
+      tokenRes = await fetch(OAUTH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
     }
-
-    const tokenRes = await fetch(OAUTH_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
 
     if (!tokenRes.ok) {
       let message = `Authentication failed (${tokenRes.status})`;
@@ -140,9 +152,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     accessTokenRef.current = access_token;
 
     // Attempt to fetch full user profile + domain context.
-    // Falls back to a minimal object if the endpoint is unavailable —
-    // replace VITE_SN_USER_INFO_PATH with the Scripted REST endpoint
-    // (/api/x_dxcis_loans_wi_0/auth/me) once provisioned in ServiceNow.
+    // Falls back to a minimal object if the endpoint is unavailable.
+    // Set VITE_SN_USER_INFO_PATH=/api/x_dxcis_loans_wi_0/auth/me once
+    // the Scripted REST endpoint is provisioned in the SN instance.
     let user: SNUser;
     try {
       const userRes = await fetch(buildUserInfoURL(username), {

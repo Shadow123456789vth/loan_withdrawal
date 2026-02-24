@@ -14,12 +14,15 @@ import {
   DialogContent,
   DialogActions,
   Alert,
+  CircularProgress,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { useCase } from '../context/CaseContext';
+import { useAuth } from '../context/AuthContext';
+import { snPatch } from '../services/snApiClient';
 import { TriageDecisionCard } from '../components/shared/TriageDecisionCard';
 import { KPICard } from '../components/shared/KPICard';
 import { DXC } from '../theme/dxcTheme';
@@ -72,9 +75,11 @@ function PolicySnapshot() {
 
 export function LowTouchPage() {
   const navigate = useNavigate();
-  const { activeCase, idpEntities, triageResult, addWorkflowEvent, scenario } = useCase();
+  const { activeCase, idpEntities, triageResult, addWorkflowEvent, scenario, snSysId, snCaseNumber } = useCase();
+  const { isAuthenticated } = useAuth();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [approved, setApproved] = useState(false);
+  const [approveLoading, setApproveLoading] = useState(false);
 
   if (!triageResult) {
     return (
@@ -89,10 +94,24 @@ export function LowTouchPage() {
     );
   }
 
-  const handleApprove = () => {
+  const handleApprove = async () => {
     setConfirmOpen(false);
     setApproved(true);
     addWorkflowEvent('CASE_APPROVED', `Case approved by processor. Touch level: ${triageResult.touchLevel}`);
+    if (snSysId && isAuthenticated) {
+      setApproveLoading(true);
+      try {
+        const result = await snPatch<{ result: { sys_id: string; number: string } }>(
+          `/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals/${snSysId}`,
+          { state: 'Resolved', stage: 'Resolution' }
+        );
+        console.log('[LowTouch] PATCH approved — sys_id:', result?.result?.sys_id, 'number:', result?.result?.number);
+      } catch (err) {
+        console.error('[LowTouch] PATCH failed:', err);
+      } finally {
+        setApproveLoading(false);
+      }
+    }
     setTimeout(() => navigate('/confirmation'), 1200);
   };
 
@@ -137,6 +156,13 @@ export function LowTouchPage() {
             size="small"
             sx={{ backgroundColor: '#dbeafe', color: DXC.trueBlue, fontWeight: 700, fontSize: '0.68rem', height: 22 }}
           />
+          {snCaseNumber && (
+            <Chip
+              label={snCaseNumber}
+              size="small"
+              sx={{ backgroundColor: '#f0fdf4', color: DXC.stp, fontWeight: 700, fontSize: '0.68rem', height: 22, border: `1px solid ${DXC.stp}33` }}
+            />
+          )}
         </Box>
         <Typography variant="body2" sx={{ color: 'rgba(14,16,32,0.55)' }}>
           High-confidence transaction — review the summary and approve with a single action.
@@ -315,7 +341,7 @@ export function LowTouchPage() {
             You are about to approve the following transaction for submission to the admin system:
           </Typography>
           {[
-            { label: 'Case ID', value: activeCase.id },
+            { label: 'Case ID', value: snCaseNumber ?? activeCase.id },
             { label: 'Policy', value: activeCase.policyNumber },
             { label: 'Owner', value: activeCase.ownerName },
             { label: 'Transaction', value: activeCase.transactionType },
@@ -335,7 +361,8 @@ export function LowTouchPage() {
           <Button
             onClick={handleApprove}
             variant="contained"
-            endIcon={<ArrowForwardIcon />}
+            disabled={approveLoading}
+            endIcon={approveLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : <ArrowForwardIcon />}
             sx={{ backgroundColor: DXC.stp, '&:hover': { backgroundColor: '#15803d' } }}
           >
             Confirm Approval

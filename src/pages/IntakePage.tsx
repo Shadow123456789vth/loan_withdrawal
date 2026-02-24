@@ -21,6 +21,7 @@ import {
   IconButton,
   Divider,
   Alert,
+  CircularProgress,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
@@ -30,25 +31,54 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
+import LinkIcon from '@mui/icons-material/Link';
 import { useCase } from '../context/CaseContext';
+import { useAuth } from '../context/AuthContext';
+import { snPost } from '../services/snApiClient';
 import { TRANSACTION_TYPE_REGISTRY } from '../data/mockData';
 import { DXC } from '../theme/dxcTheme';
 
-const CHANNEL_SOURCES = ['Portal', 'Mail / Fax', 'Call Center', 'AWD / Integration', 'IVR'];
+// Map UI channel labels to ServiceNow contact_type values
+const CHANNEL_SOURCES: { label: string; value: string }[] = [
+  { label: 'Portal',            value: 'Web' },
+  { label: 'Mail / Fax',        value: 'Email' },
+  { label: 'Call Center',       value: 'Phone' },
+  { label: 'AWD / Integration', value: 'Integration' },
+  { label: 'IVR',               value: 'Phone' },
+];
+
+// Map transaction type keys to SN transaction_type display values
+const TXN_TYPE_TO_SN: Record<string, string> = {
+  LIFE_LOAN:             'Policy Loan',
+  ANNUITY_WITHDRAWAL:    'Annuity Withdrawal',
+  LIFE_FULL_SURRENDER:   'Full Surrender',
+  ANNUITY_RMD:           'Annuity RMD',
+  LIFE_PARTIAL_SURRENDER:'Partial Surrender',
+};
+
+interface SNCreateResponse {
+  result: {
+    sys_id: string;
+    number: string;
+    state: string;
+    stage: string;
+  };
+}
 
 function IDPStatusIcon({ status }: { status: string }) {
-  if (status === 'complete') return <CheckCircleIcon sx={{ fontSize: 16, color: DXC.stp }} />;
-  if (status === 'failed') return <ErrorIcon sx={{ fontSize: 16, color: DXC.red }} />;
+  if (status === 'complete')   return <CheckCircleIcon sx={{ fontSize: 16, color: DXC.stp }} />;
+  if (status === 'failed')     return <ErrorIcon sx={{ fontSize: 16, color: DXC.red }} />;
   if (status === 'processing') return <AutorenewIcon sx={{ fontSize: 16, color: DXC.trueBlue, animation: 'spin 1s linear infinite' }} />;
   return <HourglassEmptyIcon sx={{ fontSize: 16, color: 'rgba(14,16,32,0.4)' }} />;
 }
 
 function IDPStatusChip({ status }: { status: string }) {
   const config = {
-    complete: { label: 'Extraction Complete', bg: '#dcfce7', color: DXC.stp },
-    failed: { label: 'Failed', bg: '#fee2e2', color: DXC.red },
-    processing: { label: 'Processing…', bg: '#dbeafe', color: DXC.trueBlue },
-    queued: { label: 'Queued', bg: '#F6F3F0', color: 'rgba(14,16,32,0.5)' },
+    complete:   { label: 'Extraction Complete', bg: '#dcfce7', color: DXC.stp },
+    failed:     { label: 'Failed',              bg: '#fee2e2', color: DXC.red },
+    processing: { label: 'Processing…',         bg: '#dbeafe', color: DXC.trueBlue },
+    queued:     { label: 'Queued',              bg: '#F6F3F0', color: 'rgba(14,16,32,0.5)' },
   }[status] ?? { label: status, bg: '#F6F3F0', color: '#0E1020' };
 
   return (
@@ -62,28 +92,75 @@ function IDPStatusChip({ status }: { status: string }) {
 
 export function IntakePage() {
   const navigate = useNavigate();
-  const { activeCase, documents, scenario, setScenario } = useCase();
+  const { activeCase, documents, scenario, setScenario, snSysId, snCaseNumber, setSNCase } = useCase();
+  const { isAuthenticated } = useAuth();
 
-  const selectedTxnType = TRANSACTION_TYPE_REGISTRY.find((t) => t.key === activeCase.transactionTypeKey);
+  // Editable form state (pre-seeded from mock scenario)
+  const [policyNumber, setPolicyNumber]   = useState(activeCase.policyNumber);
+  const [channelSource, setChannelSource] = useState(CHANNEL_SOURCES[0].value);
+  const [txnTypeKey, setTxnTypeKey]       = useState(activeCase.transactionTypeKey);
+
+  // SN submission state
+  const [submitting, setSubmitting]   = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const selectedTxnType = TRANSACTION_TYPE_REGISTRY.find((t) => t.key === txnTypeKey);
+  const caseCreated = Boolean(snSysId);
+
+  const handleTxnTypeChange = (key: string) => {
+    setTxnTypeKey(key);
+    if (key === 'ANNUITY_WITHDRAWAL' || key === 'ANNUITY_RMD') setScenario('withdrawal');
+    else setScenario('loan');
+  };
+
+  const handleCreateCase = async () => {
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const txnLabel = TXN_TYPE_TO_SN[txnTypeKey] ?? txnTypeKey;
+      const data = await snPost<SNCreateResponse>(
+        '/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals',
+        {
+          state:               'New',
+          stage:               'Initiation',
+          contact_type:        channelSource,
+          transaction_type:    txnLabel,
+          policy_number:       policyNumber,
+          short_description:   `${txnLabel} | ${policyNumber}`,
+        },
+      );
+      setSNCase(data.result.sys_id, data.result.number);
+      console.log('[Intake] Case created — sys_id:', data.result.sys_id, 'number:', data.result.number);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Failed to create case in ServiceNow');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <Box>
       {/* Page header */}
       <Box sx={{ mb: 3 }}>
-        <Typography
-          variant="h4"
-          sx={{
-            fontFamily: '"GT Standard Extended", "Arial Black", sans-serif',
-            fontWeight: 700,
-            fontSize: '1.4rem',
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
-            color: DXC.midnightBlue,
-            mb: 0.5,
-          }}
-        >
-          Case Intake
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.75 }}>
+          <Typography
+            variant="h4"
+            sx={{
+              fontFamily: '"GT Standard Extended", "Arial Black", sans-serif',
+              fontWeight: 700,
+              fontSize: '1.4rem',
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              color: DXC.midnightBlue,
+            }}
+          >
+            Case Intake
+          </Typography>
+          {isAuthenticated
+            ? <Chip label="Live Mode" size="small" icon={<LinkIcon sx={{ fontSize: '12px !important', color: `${DXC.stp} !important` }} />} sx={{ height: 20, fontSize: '0.6rem', fontWeight: 700, backgroundColor: 'rgba(22,163,74,0.08)', color: DXC.stp, border: `1px solid rgba(22,163,74,0.25)` }} />
+            : <Chip label="Demo Mode" size="small" sx={{ height: 20, fontSize: '0.6rem', fontWeight: 600, backgroundColor: 'rgba(14,16,32,0.06)', color: 'rgba(14,16,32,0.45)', border: '1px solid rgba(14,16,32,0.1)' }} />
+          }
+        </Box>
         <Typography variant="body2" sx={{ color: 'rgba(14,16,32,0.55)' }}>
           Select the transaction type, identify the policy, and load the submitted documents for processing.
         </Typography>
@@ -112,16 +189,12 @@ export function IntakePage() {
 
               <Grid container spacing={2.5}>
                 <Grid item xs={12} sm={6}>
-                  <FormControl fullWidth size="small">
+                  <FormControl fullWidth size="small" disabled={caseCreated}>
                     <InputLabel>Transaction Type</InputLabel>
                     <Select
-                      value={activeCase.transactionTypeKey}
+                      value={txnTypeKey}
                       label="Transaction Type"
-                      onChange={(e) => {
-                        const key = e.target.value;
-                        if (key === 'ANNUITY_WITHDRAWAL') setScenario('withdrawal');
-                        else setScenario('loan');
-                      }}
+                      onChange={(e) => handleTxnTypeChange(e.target.value)}
                     >
                       {TRANSACTION_TYPE_REGISTRY.map((t) => (
                         <MenuItem key={t.key} value={t.key}>
@@ -140,10 +213,15 @@ export function IntakePage() {
                     fullWidth
                     size="small"
                     label="Policy / Contract Number"
-                    value={activeCase.policyNumber}
-                    InputProps={{ readOnly: true }}
+                    value={policyNumber}
+                    onChange={(e) => setPolicyNumber(e.target.value)}
+                    disabled={caseCreated}
                     sx={{ '& input': { fontWeight: 600 } }}
-                    helperText={<span style={{ color: DXC.stp, fontWeight: 600, fontSize: '0.7rem' }}>✓ Policy verified</span>}
+                    helperText={
+                      policyNumber
+                        ? <span style={{ color: DXC.stp, fontWeight: 600, fontSize: '0.7rem' }}>✓ Policy verified</span>
+                        : undefined
+                    }
                   />
                 </Grid>
 
@@ -158,11 +236,15 @@ export function IntakePage() {
                 </Grid>
 
                 <Grid item xs={12} sm={6}>
-                  <FormControl fullWidth size="small">
+                  <FormControl fullWidth size="small" disabled={caseCreated}>
                     <InputLabel>Channel Source</InputLabel>
-                    <Select value={activeCase.channelSource} label="Channel Source">
+                    <Select
+                      value={channelSource}
+                      label="Channel Source"
+                      onChange={(e) => setChannelSource(e.target.value)}
+                    >
                       {CHANNEL_SOURCES.map((ch) => (
-                        <MenuItem key={ch} value={ch}>{ch}</MenuItem>
+                        <MenuItem key={ch.value + ch.label} value={ch.value}>{ch.label}</MenuItem>
                       ))}
                     </Select>
                   </FormControl>
@@ -188,10 +270,10 @@ export function IntakePage() {
                   </Typography>
                   <Grid container spacing={1.5}>
                     {[
-                      { label: 'IDP Template', value: selectedTxnType.idpTemplateRef },
+                      { label: 'IDP Template',  value: selectedTxnType.idpTemplateRef },
                       { label: 'Decision Table', value: selectedTxnType.decisionTableRef },
-                      { label: 'Form Layout', value: selectedTxnType.formLayoutRef },
-                      { label: 'GOC Checklist', value: selectedTxnType.goodOrderChecklistRef },
+                      { label: 'Form Layout',    value: selectedTxnType.formLayoutRef },
+                      { label: 'GOC Checklist',  value: selectedTxnType.goodOrderChecklistRef },
                     ].map((item) => (
                       <Grid item xs={6} sm={3} key={item.label}>
                         <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'rgba(14,16,32,0.4)', mb: 0.25 }}>
@@ -203,13 +285,51 @@ export function IntakePage() {
                       </Grid>
                     ))}
                   </Grid>
-                  <Box sx={{ mt: 1.5, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  <Box sx={{ mt: 1.5 }}>
                     <Typography sx={{ fontSize: '0.72rem', color: 'rgba(14,16,32,0.5)' }}>
                       Confidence thresholds — Default: {selectedTxnType.confidenceThresholds.default}% · Signature: {selectedTxnType.confidenceThresholds.signature}% · Amounts: {selectedTxnType.confidenceThresholds.amounts}%
                     </Typography>
                   </Box>
                 </Box>
               )}
+
+              {/* SN Create / Status */}
+              <Box sx={{ mt: 3 }}>
+                {!caseCreated && isAuthenticated && (
+                  <>
+                    {submitError && (
+                      <Alert severity="error" sx={{ mb: 2, borderRadius: '10px', fontSize: '0.78rem' }}>
+                        {submitError}
+                      </Alert>
+                    )}
+                    <Button
+                      variant="contained"
+                      startIcon={submitting ? <CircularProgress size={16} sx={{ color: 'inherit' }} /> : <AddCircleOutlineIcon />}
+                      onClick={handleCreateCase}
+                      disabled={submitting || !policyNumber.trim()}
+                      sx={{ backgroundColor: DXC.trueBlue, '&:hover': { backgroundColor: DXC.royalBlue }, borderRadius: '10px', fontWeight: 700, fontSize: '0.82rem', textTransform: 'none' }}
+                    >
+                      {submitting ? 'Creating in ServiceNow…' : 'Create Case in ServiceNow'}
+                    </Button>
+                  </>
+                )}
+
+                {caseCreated && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, backgroundColor: 'rgba(22,163,74,0.06)', border: '1px solid rgba(22,163,74,0.2)', borderRadius: '10px' }}>
+                    <CheckCircleIcon sx={{ color: DXC.stp, fontSize: 20 }} />
+                    <Box>
+                      <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: DXC.stp }}>Case created in ServiceNow</Typography>
+                      <Typography sx={{ fontFamily: 'monospace', fontSize: '0.88rem', fontWeight: 700, color: DXC.midnightBlue }}>{snCaseNumber}</Typography>
+                    </Box>
+                  </Box>
+                )}
+
+                {!isAuthenticated && (
+                  <Typography sx={{ fontSize: '0.75rem', color: 'rgba(14,16,32,0.45)', fontStyle: 'italic' }}>
+                    Connect to ServiceNow from the Dashboard to create live cases.
+                  </Typography>
+                )}
+              </Box>
             </CardContent>
           </Card>
 
@@ -332,10 +452,11 @@ export function IntakePage() {
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                 {[
-                  { label: 'Case ID', value: activeCase.id },
-                  { label: 'Transaction', value: activeCase.transactionType },
-                  { label: 'Channel', value: activeCase.channelSource },
-                  { label: 'Documents', value: `${documents.length} attached` },
+                  { label: 'Case ID',     value: snCaseNumber ?? activeCase.id },
+                  { label: 'Transaction', value: selectedTxnType?.displayName ?? activeCase.transactionType },
+                  { label: 'Channel',     value: CHANNEL_SOURCES.find((c) => c.value === channelSource)?.label ?? channelSource },
+                  { label: 'Policy',      value: policyNumber || '—' },
+                  { label: 'Documents',   value: `${documents.length} attached` },
                   {
                     label: 'IDP Status',
                     value: documents.every((d) => d.idpStatus === 'complete') ? 'All complete' : 'Processing…',
@@ -370,15 +491,15 @@ export function IntakePage() {
                 L&A Framework — Layer 1
               </Typography>
               {[
-                { label: 'Channel Classification', status: 'done' },
-                { label: 'Case Shell Created', status: 'done' },
-                { label: 'Document Landing', status: 'done' },
-                { label: 'IDP Trigger', status: 'done' },
-                { label: 'Policy Data Fetch', status: 'done' },
+                { label: 'Channel Classification', done: true },
+                { label: 'Case Shell Created',     done: caseCreated || !isAuthenticated },
+                { label: 'Document Landing',       done: true },
+                { label: 'IDP Trigger',            done: true },
+                { label: 'Policy Data Fetch',      done: true },
               ].map((step) => (
                 <Box key={step.label} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
-                  <CheckCircleIcon sx={{ fontSize: 15, color: DXC.stp, flexShrink: 0 }} />
-                  <Typography sx={{ fontSize: '0.8rem', color: '#0E1020', fontWeight: 500 }}>
+                  <CheckCircleIcon sx={{ fontSize: 15, color: step.done ? DXC.stp : 'rgba(14,16,32,0.2)', flexShrink: 0 }} />
+                  <Typography sx={{ fontSize: '0.8rem', color: step.done ? '#0E1020' : 'rgba(14,16,32,0.4)', fontWeight: step.done ? 500 : 400 }}>
                     {step.label}
                   </Typography>
                 </Box>
@@ -387,20 +508,23 @@ export function IntakePage() {
           </Card>
 
           <Alert
-            severity="info"
+            severity={caseCreated ? 'success' : 'info'}
             sx={{
               borderRadius: '12px',
-              backgroundColor: '#dbeafe',
-              border: '1px solid rgba(73,149,255,0.3)',
-              '& .MuiAlert-icon': { color: DXC.trueBlue },
+              backgroundColor: caseCreated ? 'rgba(22,163,74,0.08)' : '#dbeafe',
+              border: `1px solid ${caseCreated ? 'rgba(22,163,74,0.25)' : 'rgba(73,149,255,0.3)'}`,
+              '& .MuiAlert-icon': { color: caseCreated ? DXC.stp : DXC.trueBlue },
               mb: 3,
             }}
           >
             <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: '#0E1020', mb: 0.25 }}>
-              IDP Extraction Complete
+              {caseCreated ? `Case ${snCaseNumber} Ready` : 'IDP Extraction Complete'}
             </Typography>
             <Typography sx={{ fontSize: '0.75rem', color: 'rgba(14,16,32,0.65)' }}>
-              {documents.filter((d) => d.idpStatus === 'complete').length} of {documents.length} documents processed. Proceed to IDP Extraction to review and validate extracted entities.
+              {caseCreated
+                ? 'Case created in ServiceNow. Proceed to IDP Extraction to review and validate extracted entities.'
+                : `${documents.filter((d) => d.idpStatus === 'complete').length} of ${documents.length} documents processed. Proceed to IDP Extraction to review and validate extracted entities.`
+              }
             </Typography>
           </Alert>
 
@@ -410,10 +534,16 @@ export function IntakePage() {
             fullWidth
             endIcon={<ArrowForwardIcon />}
             onClick={() => navigate('/extraction')}
+            disabled={isAuthenticated && !caseCreated}
             sx={{ py: 1.5 }}
           >
             Proceed to IDP Extraction
           </Button>
+          {isAuthenticated && !caseCreated && (
+            <Typography sx={{ fontSize: '0.72rem', color: 'rgba(14,16,32,0.45)', textAlign: 'center', mt: 1 }}>
+              Create the case in ServiceNow first to proceed.
+            </Typography>
+          )}
         </Grid>
       </Grid>
     </Box>

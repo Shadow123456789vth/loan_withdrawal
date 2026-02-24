@@ -28,20 +28,23 @@ import type { TouchLevel } from '../types/entities';
 import { DXC } from '../theme/dxcTheme';
 
 // ─── ServiceNow record shape ────────────────────────────────────────────────
-// Fields confirmed from x_dxcis_loans_wi_0_loans_withdrawals XML export.
-// sysparm_display_value=true is used so reference fields (opened_by) and
-// choice fields (state, contact_type) return their display values directly.
+// Fields from x_dxcis_loans_wi_0_loans_withdrawals.
+// sysparm_display_value=true resolves choice fields (state, contact_type)
+// to display values, but reference fields (opened_by) still return objects.
+// Use snVal() to safely unwrap any field value.
+type SNRef = string | { display_value?: string; value?: string; link?: string };
+
 interface SNCase {
   sys_id: string;
-  number: string;
-  state: string;          // display value e.g. "New", "In Progress", "Closed"
-  stage: string;          // e.g. "initiation", "processing"
-  sys_created_on: string;
-  transaction_type: string;
-  touch_level: string;
-  policy_number: string;
-  opened_by: string;      // display value e.g. "Saurabh Phengse"
-  contact_type: string;   // e.g. "web", "phone", "email"
+  number: SNRef;
+  state: SNRef;           // e.g. "New", "Work in progress", "Closed"
+  stage: SNRef;           // e.g. "Initiation", "Processing"
+  sys_created_on: SNRef;  // SN format: "YYYY-MM-DD HH:mm:ss"
+  transaction_type?: SNRef;
+  touch_level?: SNRef;
+  policy_number?: SNRef;
+  opened_by: SNRef;       // reference field → { display_value, link }
+  contact_type: SNRef;    // e.g. "Web", "Email", "Phone"
 }
 
 // ─── Mock dashboard data (demo mode) ───────────────────────────────────────
@@ -94,23 +97,36 @@ function timeAgo(minutes: number) {
 }
 
 function snTimeAgo(isoString: string) {
-  const ms = Date.now() - new Date(isoString).getTime();
+  // SN returns "YYYY-MM-DD HH:mm:ss" — replace space with T for standard ISO parsing
+  const normalised = isoString.replace(' ', 'T');
+  const ms = Date.now() - new Date(normalised).getTime();
   const mins = Math.round(ms / 60000);
+  if (isNaN(mins)) return '—';
   return timeAgo(mins);
 }
 
-function normaliseTouchLevel(raw: string): TouchLevel {
-  const v = raw?.toLowerCase().replace(/\s+/g, '_') ?? '';
+function snVal(val: unknown): string {
+  if (!val) return '—';
+  if (typeof val === 'string') return val || '—';
+  if (typeof val === 'object' && val !== null) {
+    const v = (val as Record<string, string>).display_value ?? (val as Record<string, string>).value ?? '';
+    return v || '—';
+  }
+  return String(val) || '—';
+}
+
+function normaliseTouchLevel(raw: SNRef | undefined): TouchLevel {
+  const v = snVal(raw).toLowerCase().replace(/\s+/g, '_');
   if (v.includes('stp')) return 'STP';
   if (v.includes('low')) return 'LOW';
   if (v.includes('high')) return 'HIGH';
   return 'MODERATE';
 }
 
-function normaliseStatus(state: string, stage: string, touchLevel: string): CaseStatus {
-  const s = (state ?? '').toLowerCase();
-  const st = (stage ?? '').toLowerCase();
-  const t = (touchLevel ?? '').toLowerCase();
+function normaliseStatus(state: SNRef, stage: SNRef, touchLevel: SNRef | undefined): CaseStatus {
+  const s = snVal(state).toLowerCase();
+  const st = snVal(stage).toLowerCase();
+  const t = snVal(touchLevel).toLowerCase();
   if (s.includes('nigo') || s.includes('not in good') || st.includes('nigo')) return 'NIGO';
   // Closed / resolved / approved states (numeric 5=resolved, 7=closed or display text)
   if (s === '5' || s === '7' || s.includes('closed') || s.includes('resolved') || s.includes('approv') || s.includes('complet')) {
@@ -205,9 +221,7 @@ export function DashboardPage() {
     setDataError(null);
     snGet<{ result: SNCase[] }>('/api/now/table/x_dxcis_loans_wi_0_loans_withdrawals', {
       sysparm_limit: '50',
-      sysparm_query: 'active=true',
-      sysparm_orderby: 'sys_created_on',
-      sysparm_order: 'desc',
+      sysparm_query: 'ORDERBYDESCsys_created_on',
       sysparm_display_value: 'true',
       sysparm_fields: 'sys_id,number,state,stage,sys_created_on,transaction_type,touch_level,policy_number,opened_by,contact_type',
     })
@@ -494,14 +508,14 @@ export function DashboardPage() {
                     const stCfg = STATUS_CONFIG[st];
                     return (
                       <TableRow key={c.sys_id} sx={{ '&:hover': { backgroundColor: 'rgba(73,149,255,0.04)', cursor: 'pointer' } }} onClick={() => navigate('/intake')}>
-                        <TableCell sx={{ py: 1.25, fontFamily: 'monospace', fontSize: '0.78rem', fontWeight: 700, color: DXC.trueBlue, whiteSpace: 'nowrap' }}>{c.number}</TableCell>
-                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{c.policy_number || '—'}</TableCell>
-                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{c.opened_by || '—'}</TableCell>
-                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{c.transaction_type || c.stage || '—'}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontFamily: 'monospace', fontSize: '0.78rem', fontWeight: 700, color: DXC.trueBlue, whiteSpace: 'nowrap' }}>{snVal(c.number)}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{snVal(c.policy_number)}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{snVal(c.opened_by)}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{snVal(c.transaction_type) !== '—' ? snVal(c.transaction_type) : snVal(c.stage)}</TableCell>
                         <TableCell sx={{ py: 1.25 }}><TouchLevelBadge level={tl} /></TableCell>
                         <TableCell sx={{ py: 1.25 }}><Chip label={stCfg.label} size="small" sx={{ backgroundColor: stCfg.bg, color: stCfg.color, fontWeight: 700, fontSize: '0.65rem', height: 20 }} /></TableCell>
-                        <TableCell sx={{ py: 1.25, fontSize: '0.75rem', color: 'rgba(14,16,32,0.55)', whiteSpace: 'nowrap' }}>{c.contact_type || '—'}</TableCell>
-                        <TableCell sx={{ py: 1.25, fontSize: '0.72rem', color: 'rgba(14,16,32,0.4)', whiteSpace: 'nowrap' }}>{snTimeAgo(c.sys_created_on)}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontSize: '0.75rem', color: 'rgba(14,16,32,0.55)', whiteSpace: 'nowrap' }}>{snVal(c.contact_type)}</TableCell>
+                        <TableCell sx={{ py: 1.25, fontSize: '0.72rem', color: 'rgba(14,16,32,0.4)', whiteSpace: 'nowrap' }}>{snTimeAgo(snVal(c.sys_created_on))}</TableCell>
                         <TableCell sx={{ py: 1.25 }}><Tooltip title="Open case" arrow><IconButton size="small" sx={{ color: 'rgba(14,16,32,0.3)', '&:hover': { color: DXC.trueBlue } }}><OpenInNewIcon sx={{ fontSize: 15 }} /></IconButton></Tooltip></TableCell>
                       </TableRow>
                     );
