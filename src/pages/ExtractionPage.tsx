@@ -38,20 +38,28 @@ import { DXC } from '../theme/dxcTheme';
 import LinkIcon from '@mui/icons-material/Link';
 import CircularProgress from '@mui/material/CircularProgress';
 
+type SNRef = string | { display_value?: string; value?: string; link?: string };
+
+function snVal(v: SNRef | undefined): string {
+  if (!v) return '';
+  if (typeof v === 'string') return v;
+  return v.display_value ?? v.value ?? '';
+}
+
 interface SNCase {
   sys_id: string;
   number: string;
-  state: string;
-  stage: string;
-  contact_type: string;
-  transaction_type: string;
-  policy_number: string;
-  short_description: string;
+  state: SNRef;
+  stage: SNRef;
+  contact_type: SNRef;
+  transaction_type: SNRef;
+  policy_number: SNRef;
+  short_description: SNRef;
   // Form data fields set at Intake — replace mock IDP values
-  owner_name: string;
-  requested_amount: string;
-  payment_method: string;
-  federal_withholding: string;
+  owner_name: SNRef;
+  requested_amount: SNRef;
+  payment_method: SNRef;
+  federal_withholding: SNRef;
 }
 
 const GROUP_LABELS: Record<IDPFieldGroup, string> = {
@@ -428,11 +436,11 @@ export function ExtractionPage() {
         // Only non-empty values are forwarded; mock values remain as fallback.
         const raw = d.result;
         const snFieldMap: Record<string, string> = {
-          policy_number:        raw.policy_number,
-          owner_name:           raw.owner_name,
-          requested_amount:     raw.requested_amount,
-          payment_method:       raw.payment_method,
-          tax_withholding_federal: raw.federal_withholding,
+          policy_number:        snVal(raw.policy_number),
+          owner_name:           snVal(raw.owner_name),
+          requested_amount:     snVal(raw.requested_amount),
+          payment_method:       snVal(raw.payment_method),
+          tax_withholding_federal: snVal(raw.federal_withholding),
         };
         const populated = Object.fromEntries(
           Object.entries(snFieldMap).filter(([, v]) => Boolean(v && v.trim()))
@@ -449,8 +457,8 @@ export function ExtractionPage() {
   const threshold = scenario === 'withdrawal' ? 95 : 90;
 
   // Derive display values — prefer live SN data, fall back to mock
-  const displayTxnType  = snCase?.transaction_type  || activeCase.transactionType;
-  const displayPolicy   = snCase?.policy_number     || activeCase.policyNumber;
+  const displayTxnType  = snVal(snCase?.transaction_type)  || activeCase.transactionType;
+  const displayPolicy   = snVal(snCase?.policy_number)     || activeCase.policyNumber;
   const displayCaseNum  = snCaseNumber               || activeCase.id;
 
   const groups = (['identity', 'financial', 'payment', 'tax'] as IDPFieldGroup[]).map((g) => ({
@@ -514,7 +522,7 @@ export function ExtractionPage() {
           </Box>
           <Typography variant="body2" sx={{ color: 'rgba(14,16,32,0.55)' }}>
             Review extracted fields, correct errors, and accept validated values before triage.
-            {snCase?.policy_number && <> · Policy: <strong>{snCase.policy_number}</strong></>}
+            {snVal(snCase?.policy_number) && <> · Policy: <strong>{snVal(snCase?.policy_number)}</strong></>}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
